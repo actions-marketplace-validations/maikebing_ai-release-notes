@@ -8,11 +8,13 @@ branding:
 
 inputs:
   from_tag:
-    description: "Start git tag (e.g. v1.0.0)"
-    required: true
+    description: "Start git tag (e.g. v1.0.0). If omitted, auto-detected as the previous tag reachable from to_tag."
+    required: false
+    default: ""
   to_tag:
-    description: "End git tag (e.g. v1.1.0)"
-    required: true
+    description: "End git tag or ref (e.g. v1.1.0). If omitted, auto-detected from GITHUB_REF (tag push) or HEAD."
+    required: false
+    default: ""
   model:
     description: "Ollama model name (e.g. qwen2.5:0.5b, qwen2.5:1.5b, llama3.2:1b)"
     required: false
@@ -35,6 +37,10 @@ outputs:
     description: "Generated release notes in Markdown format"
   commits:
     description: "Raw commit log between the two tags"
+  current_tag:
+    description: "The resolved 'to' ref (detected or provided)"
+  previous_tag:
+    description: "The resolved 'from' ref (detected or provided)"
 
 runs:
   using: "node20"

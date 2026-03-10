@@ -36,29 +36,86 @@ async function getExecOutput(command, args = [], options = {}) {
 
 /**
  * Ensure both tags exist in the local repository.
- * @param {string} fromTag
- * @param {string} toTag
+ * @param {string} fromRef
+ * @param {string} toRef
  */
-async function ensureTags(fromTag, toTag) {
-  core.info("Fetching all tags...");
-  await exec.exec("git", ["fetch", "--force", "--tags"]);
-
-  const fromCheck = await getExecOutput("git", ["rev-parse", "--verify", fromTag]);
+async function ensureRefs(fromRef, toRef) {
+  const fromCheck = await getExecOutput("git", ["rev-parse", "--verify", fromRef]);
   if (fromCheck.exitCode !== 0) {
     throw new Error(
-      `from_tag not found: "${fromTag}". Make sure the tag exists and the repository was checked out with fetch-depth: 0.`
+      `from_tag not found: "${fromRef}". Make sure the tag exists and the repository was checked out with fetch-depth: 0.`
     );
   }
 
-  const toCheck = await getExecOutput("git", ["rev-parse", "--verify", toTag]);
+  const toCheck = await getExecOutput("git", ["rev-parse", "--verify", toRef]);
   if (toCheck.exitCode !== 0) {
     throw new Error(
-      `to_tag not found: "${toTag}". Make sure the tag exists and the repository was checked out with fetch-depth: 0.`
+      `to_tag not found: "${toRef}". Make sure the tag exists and the repository was checked out with fetch-depth: 0.`
     );
   }
 
-  core.info(`from_tag: ${fromTag} (${fromCheck.stdout.trim()})`);
-  core.info(`to_tag:   ${toTag} (${toCheck.stdout.trim()})`);
+  core.info(`from: ${fromRef} (${fromCheck.stdout.trim()})`);
+  core.info(`to:   ${toRef} (${toCheck.stdout.trim()})`);
+}
+
+/**
+ * Auto-detect the current ("to") ref and the previous ("from") ref.
+ *
+ * Rules:
+ *  - If GITHUB_REF is a tag (refs/tags/...) → to = that tag name.
+ *  - Otherwise → to = "HEAD".
+ *  - Previous tag is resolved via `git describe --tags --abbrev=0 <to>^`
+ *    (i.e. the nearest tag that is an ancestor of <to> but not <to> itself).
+ *  - If no previous tag exists, fall back to the initial commit SHA.
+ *
+ * @returns {Promise<{fromRef: string, toRef: string}>}
+ */
+async function autoDetectRefs() {
+  const githubRef = process.env.GITHUB_REF || "";
+  const githubRefName = process.env.GITHUB_REF_NAME || "";
+
+  // ---- Determine toRef ----
+  let toRef;
+  let toParent; // the ref to search for the previous tag from
+
+  if (githubRef.startsWith("refs/tags/")) {
+    toRef = githubRefName;
+    // Search for previous tag starting from the commit just before this tag
+    toParent = `${toRef}^`;
+    core.info(`Auto-detected: running on tag "${toRef}".`);
+  } else {
+    toRef = "HEAD";
+    toParent = "HEAD";
+    const branchInfo = githubRefName ? ` (branch: ${githubRefName})` : "";
+    core.info(`Auto-detected: not running on a tag${branchInfo}. Using HEAD as to_ref.`);
+  }
+
+  // ---- Determine fromRef (previous tag) ----
+  const descResult = await getExecOutput("git", [
+    "describe",
+    "--tags",
+    "--abbrev=0",
+    toParent,
+  ]);
+
+  let fromRef;
+  if (descResult.exitCode === 0 && descResult.stdout.trim()) {
+    fromRef = descResult.stdout.trim();
+    core.info(`Auto-detected previous tag: "${fromRef}".`);
+  } else {
+    // No previous tag — fall back to the initial commit
+    const initResult = await getExecOutput("git", [
+      "rev-list",
+      "--max-parents=0",
+      "HEAD",
+    ]);
+    fromRef = initResult.stdout.trim();
+    core.warning(
+      `No previous tag found. Using initial commit ${fromRef} as from_ref.`
+    );
+  }
+
+  return { fromRef, toRef };
 }
 
 /**
@@ -272,8 +329,8 @@ async function generateNotes(model, prompt) {
 async function run() {
   try {
     // --- Inputs ---
-    const fromTag = core.getInput("from_tag", { required: true });
-    const toTag = core.getInput("to_tag", { required: true });
+    const fromTagInput = core.getInput("from_tag");
+    const toTagInput = core.getInput("to_tag");
     const model = core.getInput("model") || "qwen2.5:0.5b";
     const language = (core.getInput("language") || "zh").toLowerCase();
     const includeDiffstat =
@@ -295,24 +352,63 @@ async function run() {
       throw new Error(`Invalid ollama_host "${ollamaHost}". Must be a plain HTTP/HTTPS URL without path or query.`);
     }
 
-    core.info(`from_tag:         ${fromTag}`);
-    core.info(`to_tag:           ${toTag}`);
+    // --- Fetch all tags (needed for both manual input validation and auto-detection) ---
+    core.info("Fetching all tags...");
+    await exec.exec("git", ["fetch", "--force", "--tags"]);
+
+    // --- Resolve from/to refs (auto-detect if not provided) ---
+    let fromRef;
+    let toRef;
+
+    if (fromTagInput && toTagInput) {
+      fromRef = fromTagInput;
+      toRef = toTagInput;
+      core.info(`Using provided tags: from=${fromRef}, to=${toRef}`);
+    } else if (!fromTagInput && !toTagInput) {
+      core.info("No tags provided — auto-detecting from git context...");
+      ({ fromRef, toRef } = await autoDetectRefs());
+    } else if (toTagInput && !fromTagInput) {
+      toRef = toTagInput;
+      core.info(`to_tag provided (${toRef}), auto-detecting previous tag...`);
+      const toParent = `${toRef}^`;
+      const descResult = await getExecOutput("git", [
+        "describe", "--tags", "--abbrev=0", toParent,
+      ]);
+      if (descResult.exitCode === 0 && descResult.stdout.trim()) {
+        fromRef = descResult.stdout.trim();
+        core.info(`Auto-detected previous tag: "${fromRef}".`);
+      } else {
+        const initResult = await getExecOutput("git", [
+          "rev-list", "--max-parents=0", "HEAD",
+        ]);
+        fromRef = initResult.stdout.trim();
+        core.warning(`No previous tag found. Using initial commit ${fromRef} as from_ref.`);
+      }
+    } else {
+      // from_tag provided but not to_tag
+      fromRef = fromTagInput;
+      toRef = "HEAD";
+      core.info(`from_tag provided (${fromRef}), using HEAD as to_ref.`);
+    }
+
+    core.info(`from_ref:         ${fromRef}`);
+    core.info(`to_ref:           ${toRef}`);
     core.info(`model:            ${model}`);
     core.info(`language:         ${language}`);
     core.info(`include_diffstat: ${includeDiffstat}`);
 
-    // --- Validate tags ---
-    await ensureTags(fromTag, toTag);
+    // --- Validate refs exist ---
+    await ensureRefs(fromRef, toRef);
 
     // --- Collect commits ---
-    const commits = await buildCommitLog(fromTag, toTag);
+    const commits = await buildCommitLog(fromRef, toRef);
     core.info("Commit log collected.");
     core.debug(commits);
 
     // --- Optionally collect diffstat ---
     let diffstat = "";
     if (includeDiffstat) {
-      diffstat = await buildDiffStat(fromTag, toTag);
+      diffstat = await buildDiffStat(fromRef, toRef);
     }
 
     // --- Install & start Ollama ---
@@ -323,7 +419,7 @@ async function run() {
     await pullModel(model);
 
     // --- Build prompt ---
-    const prompt = buildPrompt(fromTag, toTag, commits, diffstat, language);
+    const prompt = buildPrompt(fromRef, toRef, commits, diffstat, language);
     core.debug("Prompt:\n" + prompt);
 
     // --- Generate notes ---
@@ -332,6 +428,8 @@ async function run() {
     // --- Outputs ---
     core.setOutput("release_notes", notes);
     core.setOutput("commits", commits);
+    core.setOutput("current_tag", toRef);
+    core.setOutput("previous_tag", fromRef);
 
     // --- Write to step summary ---
     await core.summary
@@ -341,8 +439,8 @@ async function run() {
           { data: "Item", header: true },
           { data: "Value", header: true },
         ],
-        ["From tag", `\`${fromTag}\``],
-        ["To tag", `\`${toTag}\``],
+        ["From tag", `\`${fromRef}\``],
+        ["To tag", `\`${toRef}\``],
         ["Model", `\`${model}\``],
         ["Language", language],
       ])

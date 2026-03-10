@@ -10,18 +10,50 @@
 ## Features
 
 - 🔖 Compare any two git tags and extract the commit log
+- 🔍 **Auto-detects** current and previous tags — works with zero configuration on tag pushes
 - 🤖 Auto-installs and starts **Ollama** on the GitHub Actions runner
 - 📦 Pulls a small, fast LLM (e.g. `qwen2.5:0.5b`)
 - 🌏 Generates release notes in **Chinese**, **English**, or **bilingual**
 - 📊 Optionally includes file-level diff statistics
-- 📤 Exposes `release_notes` and `commits` as job outputs
+- 📤 Exposes `release_notes`, `commits`, `current_tag`, and `previous_tag` as job outputs
 - 📋 Appends a rich summary to **$GITHUB_STEP_SUMMARY**
 
 ---
 
 ## Usage
 
-### Basic example
+### Minimal example (fully auto-detected)
+
+If triggered on a tag push, both `from_tag` and `to_tag` are detected automatically:
+
+```yaml
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release-notes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate release notes (auto-detected tags)
+        id: relnotes
+        uses: maikebing/ai-release-notes@v1
+
+      - name: Print detected tags
+        run: |
+          echo "Previous: ${{ steps.relnotes.outputs.previous_tag }}"
+          echo "Current:  ${{ steps.relnotes.outputs.current_tag }}"
+```
+
+When run on a branch or manual trigger, the action uses the most recent reachable tag as
+`from_tag` and `HEAD` as `to_tag`.
+
+### Basic example (explicit tags)
 
 ```yaml
 - name: Checkout with full history
@@ -75,18 +107,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Detect previous tag
-        id: prev
-        run: |
-          CURRENT="${GITHUB_REF_NAME}"
-          PREV=$(git tag --sort=-creatordate | grep -v "^v[0-9]*$" | grep -v "^${CURRENT}$" | head -n 1)
-          echo "prev_tag=${PREV}" >> "$GITHUB_OUTPUT"
-
-      - name: Generate release notes
+      - name: Generate release notes (auto-detected)
         uses: maikebing/ai-release-notes@v1
-        with:
-          from_tag: ${{ steps.prev.outputs.prev_tag }}
-          to_tag:   ${{ github.ref_name }}
+        # No from_tag / to_tag needed — auto-detected from GITHUB_REF
 ```
 
 ---
@@ -95,8 +118,8 @@ jobs:
 
 | Name               | Required | Default                    | Description |
 |--------------------|----------|----------------------------|-------------|
-| `from_tag`         | ✅        | —                          | Start git tag (e.g. `v1.0.0`) |
-| `to_tag`           | ✅        | —                          | End git tag (e.g. `v1.1.0`) |
+| `from_tag`         | ❌        | auto-detected              | Start git tag. Auto-detected as the previous tag reachable from `to_tag` if omitted. |
+| `to_tag`           | ❌        | auto-detected              | End tag or ref. Auto-detected from `GITHUB_REF` (tag push) or `HEAD` if omitted. |
 | `model`            | ❌        | `qwen2.5:0.5b`             | Ollama model name |
 | `language`         | ❌        | `zh`                       | Output language: `zh`, `en`, or `both` |
 | `include_diffstat` | ❌        | `false`                    | Include file change statistics in the prompt |
@@ -108,6 +131,8 @@ jobs:
 |-----------------|-------------|
 | `release_notes` | Generated release notes in Markdown format |
 | `commits`       | Raw commit log between the two tags |
+| `current_tag`   | The resolved "to" ref (detected or provided) |
+| `previous_tag`  | The resolved "from" ref (detected or provided) |
 
 ---
 
