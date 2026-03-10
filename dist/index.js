@@ -31731,6 +31731,16 @@ async function run() {
       throw new Error(`Invalid language "${language}". Must be one of: zh, en, both.`);
     }
 
+    // Validate model name to prevent shell injection (allow alphanumeric, colon, dot, dash, slash)
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_./:@-]*$/.test(model)) {
+      throw new Error(`Invalid model name "${model}". Only alphanumeric characters, colons, dots, dashes, slashes and @ are allowed.`);
+    }
+
+    // Validate ollama host is a safe URL (no shell special characters)
+    if (!/^https?:\/\/[a-zA-Z0-9._:[\]-]+$/.test(ollamaHost)) {
+      throw new Error(`Invalid ollama_host "${ollamaHost}". Must be a plain HTTP/HTTPS URL without path or query.`);
+    }
+
     core.info(`from_tag:         ${fromTag}`);
     core.info(`to_tag:           ${toTag}`);
     core.info(`model:            ${model}`);
