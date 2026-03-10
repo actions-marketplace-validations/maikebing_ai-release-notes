@@ -1,0 +1,41 @@
+name: "AI Release Notes with Ollama"
+description: "Generate professional release notes between two git tags using a local Ollama model"
+author: "maikebing"
+
+branding:
+  icon: "file-text"
+  color: "blue"
+
+inputs:
+  from_tag:
+    description: "Start git tag (e.g. v1.0.0)"
+    required: true
+  to_tag:
+    description: "End git tag (e.g. v1.1.0)"
+    required: true
+  model:
+    description: "Ollama model name (e.g. qwen2.5:0.5b, qwen2.5:1.5b, llama3.2:1b)"
+    required: false
+    default: "qwen2.5:0.5b"
+  language:
+    description: "Output language for release notes: 'zh' for Chinese, 'en' for English, 'both' for bilingual"
+    required: false
+    default: "zh"
+  include_diffstat:
+    description: "Include file diff statistics in the prompt (true/false)"
+    required: false
+    default: "false"
+  ollama_host:
+    description: "Ollama server host (default: http://127.0.0.1:11434)"
+    required: false
+    default: "http://127.0.0.1:11434"
+
+outputs:
+  release_notes:
+    description: "Generated release notes in Markdown format"
+  commits:
+    description: "Raw commit log between the two tags"
+
+runs:
+  using: "node20"
+  main: "dist/index.js"

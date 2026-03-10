@@ -1,0 +1,122 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. v1.0.0)"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark as pre-release"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  release:
+    name: Tag & Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build dist
+        run: npm run build
+
+      - name: Validate dist is up to date
+        run: npm run build:check
+
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit updated dist (if changed)
+        run: |
+          git add dist/
+          if git diff --cached --quiet; then
+            echo "dist is already up to date, nothing to commit."
+          else
+            git commit -m "chore: rebuild dist for ${{ inputs.version }}"
+            git push
+          fi
+
+      - name: Create and push version tag
+        run: |
+          VERSION="${{ inputs.version }}"
+          git tag -fa "${VERSION}" -m "Release ${VERSION}"
+          git push origin "${VERSION}" --force
+
+          # Also update/create a major-version floating tag (e.g. v1 -> latest v1.x.x)
+          MAJOR_TAG=$(echo "${VERSION}" | grep -oE '^v[0-9]+')
+          if [ -n "${MAJOR_TAG}" ]; then
+            git tag -fa "${MAJOR_TAG}" -m "Update ${MAJOR_TAG} to ${VERSION}"
+            git push origin "${MAJOR_TAG}" --force
+          fi
+
+      - name: Generate release notes between previous tag and this tag
+        id: gen_notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ inputs.version }}"
+
+          # Find the previous tag
+          PREV_TAG=$(git tag --sort=-creatordate \
+            | grep -v "^v[0-9]*$" \
+            | grep -v "^${VERSION}$" \
+            | head -n 1)
+
+          if [ -z "${PREV_TAG}" ]; then
+            echo "No previous tag found; using initial commit."
+            PREV_TAG=$(git rev-list --max-parents=0 HEAD)
+          fi
+
+          echo "Previous tag: ${PREV_TAG}"
+          echo "PREV_TAG=${PREV_TAG}" >> "$GITHUB_ENV"
+
+          # Collect commits
+          COMMITS=$(git log "${PREV_TAG}..${VERSION}" \
+            --no-merges \
+            --pretty=format:'- %s (%an, %h)' || true)
+
+          if [ -z "${COMMITS}" ]; then
+            COMMITS="- (no new commits)"
+          fi
+
+          NOTES="## What's Changed\n\n${COMMITS}\n\n**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${VERSION}"
+
+          # Write to file (handle multiline)
+          printf '%b' "${NOTES}" > release_notes.md
+          cat release_notes.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ inputs.version }}"
+          PRERELEASE_FLAG=""
+          if [ "${{ inputs.prerelease }}" = "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+
+          gh release create "${VERSION}" \
+            --title "${VERSION}" \
+            --notes-file release_notes.md \
+            ${PRERELEASE_FLAG} \
+            --verify-tag

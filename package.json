@@ -1,0 +1,30 @@
+{
+  "name": "ai-release-notes",
+  "version": "1.0.0",
+  "description": "Generate professional release notes between two git tags using a local Ollama model",
+  "main": "dist/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "build": "ncc build src/index.js -o dist --license licenses.txt",
+    "build:check": "node scripts/check-dist.js"
+  },
+  "dependencies": {
+    "@actions/core": "^2.0.3",
+    "@actions/exec": "^2.0.0"
+  },
+  "devDependencies": {
+    "@vercel/ncc": "^0.38.4"
+  },
+  "keywords": [
+    "github-action",
+    "ollama",
+    "release-notes",
+    "changelog",
+    "ai"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maikebing/ai-release-notes"
+  }
+}

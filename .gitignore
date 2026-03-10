@@ -1,0 +1,5 @@
+node_modules/
+release_notes.md
+ollama.log
+*.tmp
+.env
