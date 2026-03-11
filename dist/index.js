@@ -31394,6 +31394,14 @@ module.exports = require("tls");
 
 /***/ }),
 
+/***/ 7016:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("url");
+
+/***/ }),
+
 /***/ 9023:
 /***/ ((module) => {
 
@@ -31448,9 +31456,9 @@ var __webpack_exports__ = {};
 
 const core = __nccwpck_require__(7484);
 const exec = __nccwpck_require__(5236);
-const fs = __nccwpck_require__(9896);
-const os = __nccwpck_require__(857);
-const path = __nccwpck_require__(6928);
+const http = __nccwpck_require__(8611);
+const https = __nccwpck_require__(5692);
+const { URL: src_URL } = __nccwpck_require__(7016);
 
 /**
  * Run a command and capture its stdout/stderr.
@@ -31741,27 +31749,56 @@ ${commits}`.trim();
 }
 
 /**
- * Generate release notes by calling the Ollama model.
+ * Generate release notes by calling the Ollama HTTP API.
+ * Using the REST API instead of `ollama run` CLI avoids ANSI terminal
+ * escape codes (e.g. cursor-hide \x1b[25l / cursor-show \x1b[25h) that
+ * the interactive CLI emits and that would otherwise pollute the output.
  * @param {string} model
  * @param {string} prompt
+ * @param {string} host  e.g. "http://127.0.0.1:11434"
  * @returns {Promise<string>}
  */
-async function generateNotes(model, prompt) {
+async function generateNotes(model, prompt, host) {
   core.info(`Generating release notes with model: ${model} ...`);
 
-  const tmpFile = path.join(os.tmpdir(), "ollama-prompt.txt");
-  fs.writeFileSync(tmpFile, prompt, "utf8");
+  const url = new src_URL("/api/generate", host);
+  const requestBody = JSON.stringify({ model, prompt, stream: false });
 
-  const result = await getExecOutput("bash", [
-    "-c",
-    `ollama run "${model}" < "${tmpFile}"`,
-  ]);
+  const responseData = await new Promise((resolve, reject) => {
+    const lib = url.protocol === "https:" ? https : http;
+    const options = {
+      hostname: url.hostname,
+      port: url.port || (url.protocol === "https:" ? 443 : 80),
+      path: url.pathname,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(requestBody),
+      },
+    };
 
-  if (result.exitCode !== 0) {
-    throw new Error(`ollama run failed (exit ${result.exitCode}): ${result.stderr}`);
+    const req = lib.request(options, (res) => {
+      const chunks = [];
+      res.on("data", (chunk) => { chunks.push(chunk); });
+      res.on("end", () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString() }));
+    });
+    req.on("error", reject);
+    req.write(requestBody);
+    req.end();
+  });
+
+  if (responseData.status !== 200) {
+    throw new Error(`Ollama API request failed (HTTP ${responseData.status}): ${responseData.body}`);
   }
 
-  const notes = result.stdout.trim();
+  let parsed;
+  try {
+    parsed = JSON.parse(responseData.body);
+  } catch (e) {
+    throw new Error(`Failed to parse Ollama API response: ${e.message}`);
+  }
+
+  const notes = (parsed.response || "").trim();
   if (!notes) {
     throw new Error("Ollama returned an empty response. Try a different model or review the prompt.");
   }
@@ -31870,7 +31907,7 @@ async function run() {
     core.debug("Prompt:\n" + prompt);
 
     // --- Generate notes ---
-    const notes = await generateNotes(model, prompt);
+    const notes = await generateNotes(model, prompt, ollamaHost);
 
     // --- Outputs ---
     core.setOutput("release_notes", notes);

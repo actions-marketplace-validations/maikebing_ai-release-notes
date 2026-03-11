@@ -95,6 +95,7 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_NOTES: ${{ steps.ai_notes.outputs.release_notes }}
         run: |
           VERSION="${{ inputs.version }}"
           PRERELEASE_FLAG=""
@@ -102,8 +103,9 @@ jobs:
             PRERELEASE_FLAG="--prerelease"
           fi
 
-          # Write release notes to file
-          printf '%s' "${{ steps.ai_notes.outputs.release_notes }}" > release_notes.md
+          # Write release notes to file via env var to safely handle backticks,
+          # quotes and other special characters in the AI-generated content.
+          printf '%s' "${RELEASE_NOTES}" > release_notes.md
 
           gh release create "${VERSION}" \
             --title "${VERSION}" \
